@@ -1,8 +1,12 @@
+use clap::{Parser, Subcommand};
+use clevis_pin_tpm2::tpm_objects::TPM2Config;
 use color_eyre::eyre::{bail, eyre, WrapErr};
 use std::env;
-use std::io::{Read, Write};
+use std::fs::{read_to_string, File};
+use std::io::{stdin, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::exit;
 
 fn get_control_socket() -> Option<PathBuf> {
     let gnome_var = env::var("GNOME_KEYRING_CONTROL")
@@ -31,7 +35,7 @@ impl ControlOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum ControlResult {
     Ok = 0,
     Denied = 1,
@@ -40,30 +44,26 @@ enum ControlResult {
 }
 
 impl ControlResult {
-    fn from_u32(n: u32) -> Option<ControlResult> {
-        match n {
-            0 => Some(ControlResult::Ok),
-            1 => Some(ControlResult::Denied),
-            2 => Some(ControlResult::Failed),
-            3 => Some(ControlResult::NoDaemon),
+    fn from_bytes(bytes: [u8; 4]) -> Option<Self> {
+        let num = u32::from_be_bytes(bytes);
+        match num {
+            0 => Some(Self::Ok),
+            1 => Some(Self::Denied),
+            3 => Some(Self::NoDaemon),
             _ => None,
         }
     }
 }
 
-fn unlock_keyring(password: &str) -> color_eyre::Result<ControlResult> {
+fn unlock_keyring(password: &[u8]) -> color_eyre::Result<ControlResult> {
     let socket = get_control_socket()
         .ok_or_else(|| eyre!("Could not find gnome keyring control socket path"))?;
     let mut stream = UnixStream::connect(socket)
         .wrap_err("Could not connect to the gnome keyring unix socket")?;
 
-    let ret = stream
-        .write(&[0])
+    stream
+        .write_all(&[0])
         .wrap_err("could not write credential byte")?;
-
-    if ret != 1 {
-        bail!("writing cred byte failed")
-    }
 
     // oplen is
     // 8 = packet size + op code
@@ -71,69 +71,90 @@ fn unlock_keyring(password: &str) -> color_eyre::Result<ControlResult> {
     let oplen: u32 = 8 + 4 + password.len() as u32;
 
     // write length
-    let ret = stream
-        .write(&oplen.to_be_bytes())
+    stream
+        .write_all(&oplen.to_be_bytes())
         .wrap_err("could not write oplen")?;
 
-    if ret != 4 {
-        bail!("writing oplen failed")
-    }
-
     // write unlock
-    let ret = stream
-        .write(&ControlOp::Unlock.to_bytes())
+    stream
+        .write_all(&ControlOp::Unlock.to_bytes())
         .wrap_err("could not write unlock")?;
 
-    if ret != 4 {
-        bail!("writing unlock failed")
-    }
-
     // write pw len
-    let ret = stream
-        .write(&(password.len() as u32).to_be_bytes())
+    stream
+        .write_all(&(password.len() as u32).to_be_bytes())
         .wrap_err("could not write password length")?;
 
-    if ret != 4 {
-        bail!("writing pwlen failed")
-    }
-
-    let mut pw_buf = password.as_bytes();
-
-    while !pw_buf.is_empty() {
-        let ret = stream.write(pw_buf).wrap_err("writing password failed")?;
-        pw_buf = &pw_buf[ret..]
-    }
+    stream.write_all(password).wrap_err("writing pass failed")?;
 
     let mut buf = [0; 4];
-    let val = stream
-        .read(&mut buf)
+    stream
+        .read_exact(&mut buf)
         .wrap_err("could not read response length")?;
-    if val != 4 {
-        bail!("invalid response length length")
-    }
 
     let len = u32::from_be_bytes(buf);
     if len != 8 {
         bail!("invalid response length");
     }
 
-    let val = stream.read(&mut buf).wrap_err("could not read response")?;
-    if val != 4 {
-        bail!("invalid response length (2)")
-    }
+    stream
+        .read_exact(&mut buf)
+        .wrap_err("could not read response")?;
 
-    let resp = u32::from_be_bytes(buf);
-    let code = ControlResult::from_u32(resp).ok_or_else(|| eyre!("invalid resp"))?;
+    let code = ControlResult::from_bytes(buf).ok_or_else(|| eyre!("invalid control result"))?;
 
     Ok(code)
 }
 
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Unlock,
+    Enroll,
+}
+
 fn main() -> color_eyre::Result<()> {
     color_eyre::install().unwrap();
+    let cli = Cli::parse();
 
-    let res = unlock_keyring("example")?;
+    match cli.command {
+        Commands::Unlock => {
+            let file = PathBuf::from("/home/vivian/.config/gnome_password.token");
+            if file.exists() {
+                let token = read_to_string(file)?;
+                let password = clevis_pin_tpm2::perform_decrypt(token.as_bytes())
+                    .map_err(|err| eyre!("{err:?}"))?;
+                let res = unlock_keyring(password.as_slice())?;
+                if res != ControlResult::Ok {
+                    eprintln!("Failed to unlock keyring: {res:?}");
+                    exit(2);
+                }
+            } else {
+                bail!("password token file not found")
+            }
+            println!("Unlocked keyring successfully")
+        }
+        Commands::Enroll => {
+            let password = rpassword::prompt_password("Password: ")?;
 
-    dbg!(res);
+            if unlock_keyring(password.as_bytes())? != ControlResult::Ok {
+                eprintln!("invalid password");
+                exit(3);
+            }
+
+            let token =
+                clevis_pin_tpm2::perform_encrypt(TPM2Config::default(), password.as_bytes())
+                    .map_err(|err| eyre!("{err:?}"))?;
+            let mut file = File::create("/home/vivian/.config/gnome_password.token")?;
+            file.write_all(token.as_bytes())?;
+            println!("Password enrolled successfully")
+        }
+    }
 
     Ok(())
 }
