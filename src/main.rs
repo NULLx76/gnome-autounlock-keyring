@@ -7,7 +7,6 @@ use std::fs::{read_to_string, File};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::process::exit;
 use std::thread::sleep;
 use std::time::Duration;
 use tpm::tpm_objects::TPM2Config;
@@ -152,10 +151,12 @@ fn main() -> color_eyre::Result<()> {
             if token_path.exists() {
                 let token = read_to_string(token_path)?;
 
+                let mut res = ControlResult::NoDaemon;
+
                 for _ in 0..tries {
                     let password =
                         tpm::perform_decrypt(token.as_bytes()).map_err(|err| eyre!("{err:?}"))?;
-                    let res = unlock_keyring(password.as_slice())?;
+                    res = unlock_keyring(password.as_slice())?;
                     if res == ControlResult::Ok {
                         break;
                     } else {
@@ -164,6 +165,11 @@ fn main() -> color_eyre::Result<()> {
 
                     sleep(Duration::from_secs(timeout));
                 }
+
+                if res != ControlResult::Ok {
+                    bail!("Unlocking failed after {tries}: {res:?}");
+                }
+
             } else {
                 bail!("password token file not found")
             }
@@ -173,8 +179,7 @@ fn main() -> color_eyre::Result<()> {
             let password = rpassword::prompt_password("Password: ")?;
 
             if unlock_keyring(password.as_bytes())? != ControlResult::Ok {
-                eprintln!("invalid password");
-                exit(3);
+                bail!("invalid password");
             }
 
             let token = tpm::perform_encrypt(TPM2Config::default(), password.as_bytes())

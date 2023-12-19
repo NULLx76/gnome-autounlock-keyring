@@ -7,7 +7,7 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        cargoToml = (builtins.fromTOML (builtins.readFile ./Cargo.toml));
+        cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
         pkgs = nixpkgs.legacyPackages.${system};
         inherit (pkgs) stdenv lib;
       in rec {
@@ -75,7 +75,7 @@
                   script = ''
                     ${self.packages.${pkgs.system}.default}/bin/gnome-autounlock-keyring unlock
                   '';
-                  serviceConfig = { Type = "oneshot"; };
+                  serviceConfig.Type = "oneshot"; 
                 };
               };
             };
