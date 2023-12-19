@@ -55,7 +55,31 @@
 
         devShells.default = pkgs.mkShell {
           shellHook = "${packages.default.preBuild}";
-          inherit (packages.default) nativeBuildInputs buildInputs LIBCLANG_PATH;
+          inherit (packages.default)
+            nativeBuildInputs buildInputs LIBCLANG_PATH;
         };
-      });
+      }) // {
+        nixosModules = rec {
+          default = { config, lib, pkgs, ... }:
+            with lib;
+            let cfg = config.services.gnome-autounlock-keyring;
+            in {
+              options.services.gnome-autounlock-keyring = {
+                enable = mkEnableOption "gnome-autounlock.keyring";
+              };
+
+              config = mkIf cfg.enable {
+                systemd.user.services.gnome-autounlock-keyring = {
+                  description = "Automatically unlock gnome keyring using TPM";
+                  wantedBy = [ "gnome-session.target" ];
+                  script = ''
+                    ${self.packages.${pkgs.system}.default}/bin/gnome-autounlock-keyring unlock
+                  '';
+                  serviceConfig = { Type = "oneshot"; };
+                };
+              };
+            };
+          gnome-autounlock-keyring = default;
+        };
+      };
 }
