@@ -8,6 +8,8 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::exit;
+use std::thread::sleep;
+use std::time::Duration;
 use tpm::tpm_objects::TPM2Config;
 
 fn get_control_socket() -> Option<PathBuf> {
@@ -25,6 +27,7 @@ fn get_control_socket() -> Option<PathBuf> {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 enum ControlOp {
     Initialize = 0,
     Unlock = 1,
@@ -52,6 +55,7 @@ impl ControlResult {
         match num {
             0 => Some(Self::Ok),
             1 => Some(Self::Denied),
+            2 => Some(Self::Failed),
             3 => Some(Self::NoDaemon),
             _ => None,
         }
@@ -122,7 +126,14 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Unlock gnome keyring using encrypted password stored in tpm
-    Unlock,
+    Unlock {
+        #[arg(default_value_t = 5)]
+        tries: usize,
+
+        // timeout in seconds
+        #[arg(default_value_t = 1)]
+        timeout: u64,
+    },
     /// Enroll a password into the tpm to use when unlocking
     Enroll,
 }
@@ -137,15 +148,21 @@ fn main() -> color_eyre::Result<()> {
         .ok_or_else(|| eyre!("Token path not found"))?;
 
     match cli.command {
-        Commands::Unlock => {
+        Commands::Unlock { tries, timeout } => {
             if token_path.exists() {
                 let token = read_to_string(token_path)?;
-                let password =
-                    tpm::perform_decrypt(token.as_bytes()).map_err(|err| eyre!("{err:?}"))?;
-                let res = unlock_keyring(password.as_slice())?;
-                if res != ControlResult::Ok {
-                    eprintln!("Failed to unlock keyring: {res:?}");
-                    exit(2);
+
+                for _ in 0..tries {
+                    let password =
+                        tpm::perform_decrypt(token.as_bytes()).map_err(|err| eyre!("{err:?}"))?;
+                    let res = unlock_keyring(password.as_slice())?;
+                    if res == ControlResult::Ok {
+                        break;
+                    } else {
+                        eprintln!("Failed to unlock keyring: {res:?}");
+                    }
+
+                    sleep(Duration::from_secs(timeout));
                 }
             } else {
                 bail!("password token file not found")

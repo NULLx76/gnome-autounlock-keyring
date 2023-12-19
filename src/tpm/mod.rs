@@ -1,6 +1,5 @@
-// Copyright 2020 Patrick Uiterwijk
-//
-// Licensed under the MIT license
+// Adapted from https://github.com/fedora-iot/clevis-pin-tpm2/
+// by Patrick Uiterwijk under the MIT License
 
 use std::convert::{TryFrom, TryInto};
 

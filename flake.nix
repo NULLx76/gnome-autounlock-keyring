@@ -19,6 +19,7 @@
 
           doCheck = false;
 
+          buildInputs = with pkgs; [ openssl tpm2-tss ];
           nativeBuildInputs = with pkgs; [
             llvmPackages.libclang
             llvmPackages.libcxxClang
@@ -26,7 +27,6 @@
             pkg-config
           ];
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-          buildInputs = with pkgs; [ openssl tpm2-tss ];
 
           preBuild = ''
             export BINDGEN_EXTRA_CLANG_ARGS="$(< ${stdenv.cc}/nix-support/libc-crt1-cflags) \
@@ -53,7 +53,7 @@
           '';
         };
 
-        devShell = pkgs.mkShell {
+        devShells.default = pkgs.mkShell {
           shellHook = "${packages.default.preBuild}";
           inherit (packages.default) nativeBuildInputs buildInputs LIBCLANG_PATH;
         };
