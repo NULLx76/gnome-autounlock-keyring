@@ -1,12 +1,14 @@
+mod tpm;
+
 use clap::{Parser, Subcommand};
-use clevis_pin_tpm2::tpm_objects::TPM2Config;
 use color_eyre::eyre::{bail, eyre, WrapErr};
 use std::env;
 use std::fs::{read_to_string, File};
-use std::io::{stdin, Read, Write};
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::exit;
+use tpm::tpm_objects::TPM2Config;
 
 fn get_control_socket() -> Option<PathBuf> {
     let gnome_var = env::var("GNOME_KEYRING_CONTROL")
@@ -22,6 +24,7 @@ fn get_control_socket() -> Option<PathBuf> {
     gnome_var.or(xdg_var)
 }
 
+#[derive(Debug, Clone, Copy)]
 enum ControlOp {
     Initialize = 0,
     Unlock = 1,
@@ -108,13 +111,19 @@ fn unlock_keyring(password: &[u8]) -> color_eyre::Result<ControlResult> {
 
 #[derive(Parser)]
 struct Cli {
+    /// Defaults to CONFIG_DIR/gnome-keyring.tpm2
+    #[arg(short, long)]
+    token_path: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Unlock gnome keyring using encrypted password stored in tpm
     Unlock,
+    /// Enroll a password into the tpm to use when unlocking
     Enroll,
 }
 
@@ -122,13 +131,17 @@ fn main() -> color_eyre::Result<()> {
     color_eyre::install().unwrap();
     let cli = Cli::parse();
 
+    let token_path = cli
+        .token_path
+        .or(dirs::config_dir().map(|el| el.join("gnome-keyring.tpm2")))
+        .ok_or_else(|| eyre!("Token path not found"))?;
+
     match cli.command {
         Commands::Unlock => {
-            let file = PathBuf::from("/home/vivian/.config/gnome_password.token");
-            if file.exists() {
-                let token = read_to_string(file)?;
-                let password = clevis_pin_tpm2::perform_decrypt(token.as_bytes())
-                    .map_err(|err| eyre!("{err:?}"))?;
+            if token_path.exists() {
+                let token = read_to_string(token_path)?;
+                let password =
+                    tpm::perform_decrypt(token.as_bytes()).map_err(|err| eyre!("{err:?}"))?;
                 let res = unlock_keyring(password.as_slice())?;
                 if res != ControlResult::Ok {
                     eprintln!("Failed to unlock keyring: {res:?}");
@@ -147,10 +160,9 @@ fn main() -> color_eyre::Result<()> {
                 exit(3);
             }
 
-            let token =
-                clevis_pin_tpm2::perform_encrypt(TPM2Config::default(), password.as_bytes())
-                    .map_err(|err| eyre!("{err:?}"))?;
-            let mut file = File::create("/home/vivian/.config/gnome_password.token")?;
+            let token = tpm::perform_encrypt(TPM2Config::default(), password.as_bytes())
+                .map_err(|err| eyre!("{err:?}"))?;
+            let mut file = File::create(token_path)?;
             file.write_all(token.as_bytes())?;
             println!("Password enrolled successfully")
         }

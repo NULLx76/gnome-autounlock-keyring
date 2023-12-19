@@ -7,8 +7,15 @@ edition = "2021"
 
 [dependencies]
 color-eyre = "0.6.2"
-serde_json = "1.0.108"
-serde = { version = "1.0.193", features = ["derive"] }
-clevis-pin-tpm2 = { path = "../clevis-pin-tpm2" }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 rpassword = "7.3.1"
+tss-esapi = { version = "7.2", features = ["generate-bindings"] }
+josekit = "0.8.4"
+base64 = { version = "0.21.5", features = [] }
+tpm2-policy = "0.6.0"
+dirs = "5"
+
+[profile.release]
+lto = "thin"

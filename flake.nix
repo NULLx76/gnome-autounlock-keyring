@@ -7,40 +7,55 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
+        cargoToml = (builtins.fromTOML (builtins.readFile ./Cargo.toml));
         pkgs = nixpkgs.legacyPackages.${system};
         inherit (pkgs) stdenv lib;
-      in {
-        devShell = pkgs.mkShell {
-          shellHook = ''
-            export BINDGEN_EXTRA_CLANG_ARGS="$(< ${stdenv.cc}/nix-support/libc-crt1-cflags) \
-              $(< ${stdenv.cc}/nix-support/libc-cflags) \
-              $(< ${stdenv.cc}/nix-support/cc-cflags) \
-              $(< ${stdenv.cc}/nix-support/libcxx-cxxflags) \
-              ${
-                lib.optionalString stdenv.cc.isClang
-                "-idirafter ${stdenv.cc.cc}/lib/clang/${
-                  lib.getVersion stdenv.cc.cc
-                }/include"
-              } \
-              ${
-                lib.optionalString stdenv.cc.isGNU
-                "-isystem ${stdenv.cc.cc}/include/c++/${
-                  lib.getVersion stdenv.cc.cc
-                } -isystem ${stdenv.cc.cc}/include/c++/${
-                  lib.getVersion stdenv.cc.cc
-                }/${stdenv.hostPlatform.config} -idirafter ${stdenv.cc.cc}/lib/gcc/${stdenv.hostPlatform.config}/${
-                  lib.getVersion stdenv.cc.cc
-                }/include"
-              } \
-            "
-          '';
+      in rec {
+        packages.default = pkgs.rustPlatform.buildRustPackage {
+          pname = cargoToml.package.name;
+          version = cargoToml.package.version;
+          src = self;
+          cargoLock.lockFile = ./Cargo.lock;
+
+          doCheck = false;
+
           nativeBuildInputs = with pkgs; [
             llvmPackages.libclang
             llvmPackages.libcxxClang
             clang
+            pkg-config
           ];
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-          buildInputs = with pkgs; [ libclang pkg-config openssl tpm2-tss ];
+          buildInputs = with pkgs; [ openssl tpm2-tss ];
+
+          preBuild = ''
+            export BINDGEN_EXTRA_CLANG_ARGS="$(< ${stdenv.cc}/nix-support/libc-crt1-cflags) \
+               $(< ${stdenv.cc}/nix-support/libc-cflags) \
+               $(< ${stdenv.cc}/nix-support/cc-cflags) \
+               $(< ${stdenv.cc}/nix-support/libcxx-cxxflags) \
+               ${
+                 lib.optionalString stdenv.cc.isClang
+                 "-idirafter ${stdenv.cc.cc}/lib/clang/${
+                   lib.getVersion stdenv.cc.cc
+                 }/include"
+               } \
+               ${
+                 lib.optionalString stdenv.cc.isGNU
+                 "-isystem ${stdenv.cc.cc}/include/c++/${
+                   lib.getVersion stdenv.cc.cc
+                 } -isystem ${stdenv.cc.cc}/include/c++/${
+                   lib.getVersion stdenv.cc.cc
+                 }/${stdenv.hostPlatform.config} -idirafter ${stdenv.cc.cc}/lib/gcc/${stdenv.hostPlatform.config}/${
+                   lib.getVersion stdenv.cc.cc
+                 }/include"
+               } \
+             "
+          '';
+        };
+
+        devShell = pkgs.mkShell {
+          shellHook = "${packages.default.preBuild}";
+          inherit (packages.default) nativeBuildInputs buildInputs LIBCLANG_PATH;
         };
       });
 }
