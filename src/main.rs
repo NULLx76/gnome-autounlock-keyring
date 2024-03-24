@@ -169,7 +169,6 @@ fn main() -> color_eyre::Result<()> {
                 if res != ControlResult::Ok {
                     bail!("Unlocking failed after {tries}: {res:?}");
                 }
-
             } else {
                 bail!("password token file not found")
             }

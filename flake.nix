@@ -5,7 +5,16 @@
   };
 
   outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+    let
+      buildInputs = pkgs: with pkgs; [ openssl tpm2-tss ];
+      nativeBuildInputs = pkgs:
+        with pkgs; [
+          llvmPackages.libclang
+          llvmPackages.libcxxClang
+          clang
+          pkg-config
+        ];
+    in flake-utils.lib.eachDefaultSystem (system:
       let
         cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
         pkgs = nixpkgs.legacyPackages.${system};
@@ -19,13 +28,8 @@
 
           doCheck = false;
 
-          buildInputs = with pkgs; [ openssl tpm2-tss ];
-          nativeBuildInputs = with pkgs; [
-            llvmPackages.libclang
-            llvmPackages.libcxxClang
-            clang
-            pkg-config
-          ];
+          buildInputs = buildInputs pkgs;
+          nativeBuildInputs = nativeBuildInputs pkgs;
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
           preBuild = ''
@@ -55,8 +59,8 @@
 
         devShells.default = pkgs.mkShell {
           shellHook = "${packages.default.preBuild}";
-          inherit (packages.default)
-            nativeBuildInputs buildInputs LIBCLANG_PATH;
+          buildInputs = buildInputs pkgs;
+          nativeBuildInputs = nativeBuildInputs pkgs;
         };
       }) // {
         nixosModules = rec {
@@ -66,16 +70,24 @@
             in {
               options.services.gnome-autounlock-keyring = {
                 enable = mkEnableOption "gnome-autounlock.keyring";
+
+                target = mkOption {
+                  type = str;
+                  default = "graphical-session.target";
+                  example = "hyprland-session.target";
+                };
               };
 
               config = mkIf cfg.enable {
                 systemd.user.services.gnome-autounlock-keyring = {
                   description = "Automatically unlock gnome keyring using TPM";
-                  wantedBy = [ "gnome-session.target" ];
+                  wantedBy = [ cfg.target ];
                   script = ''
-                    ${self.packages.${pkgs.system}.default}/bin/gnome-autounlock-keyring unlock
+                    ${
+                      self.packages.${pkgs.system}.default
+                    }/bin/gnome-autounlock-keyring unlock
                   '';
-                  serviceConfig.Type = "oneshot"; 
+                  serviceConfig.Type = "oneshot";
                 };
               };
             };
