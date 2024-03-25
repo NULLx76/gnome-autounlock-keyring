@@ -72,7 +72,7 @@
                 enable = mkEnableOption "gnome-autounlock.keyring";
 
                 target = mkOption {
-                  type = str;
+                  type = types.str;
                   default = "graphical-session.target";
                   example = "hyprland-session.target";
                 };
